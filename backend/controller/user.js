@@ -1,183 +1,140 @@
 const express = require("express");
-const upload = require("../multer");
-const catchAsyncErrors = require("../middleware/catchAsyncError");
-const User = require("../model/user");
-const fs = require("fs");
-const ErrorHandler = require("../utils/ErrorHandler");
+const fs = require("fs/promises");
+const bcrypt = require("bcrypt");
 const jwt = require("jsonwebtoken");
+const upload = require("../multer");
+const User = require("../model/user");
+const catchAsyncErrors = require("../middleware/catchAsyncError");
+const ErrorHandler = require("../utils/ErrorHandler");
+const sendMail = require("../utils/sendMail");
+const sendToken = require("../utils/jwtToken");
 
 const router = express.Router();
 
+const removeUpload = async (file) => {
+  if (!file) return;
+  await fs.unlink(file.path).catch(() => {});
+};
 
-// =========================
-// CREATE USER
-// =========================
 router.post(
   "/create-user",
   upload.single("file"),
   catchAsyncErrors(async (req, res, next) => {
+    const name = req.body.name?.trim();
+    const email = req.body.email?.trim().toLowerCase();
+    const password = req.body.password;
+
+    if (!name || !email || !password) {
+      await removeUpload(req.file);
+      return next(new ErrorHandler("All fields are required", 400));
+    }
+
+    if (!/^\S+@\S+\.\S+$/.test(email)) {
+      await removeUpload(req.file);
+      return next(new ErrorHandler("Please enter a valid email", 400));
+    }
+
+    if (password.length < 4) {
+      await removeUpload(req.file);
+      return next(
+        new ErrorHandler("Password should be at least 4 characters", 400)
+      );
+    }
+
+    if (!req.file) {
+      return next(new ErrorHandler("Please upload an avatar", 400));
+    }
+
     try {
-      console.log("========== CREATE USER ==========");
-
-      console.log("BODY:", req.body);
-      console.log("FILE:", req.file);
-
-      const { name, email, password } = req.body;
-
-      // Check if User is actually a Mongoose model
-      console.log("User model:", User);
-      console.log("findOne type:", typeof User.findOne);
-      console.log("create type:", typeof User.create);
-
-      // Check existing user
-      const userEmail = await User.findOne({ email });
-
-      console.log("Existing user:", userEmail);
-
-      if (userEmail) {
-        if (req.file) {
-          const filename = req.file.filename;
-          const filePath = `uploads/${filename}`;
-
-          fs.unlink(filePath, (err) => {
-            if (err) {
-              console.log("Error deleting file:", err.message);
-            } else {
-              console.log("File deleted successfully");
-            }
-          });
-        }
-
-        return res.status(400).json({
-          success: false,
-          message: "User already exists",
-        });
+      if (await User.findOne({ email })) {
+        await removeUpload(req.file);
+        return next(new ErrorHandler("User already exists", 400));
       }
 
-      // Check avatar
-      if (!req.file) {
-        return res.status(400).json({
-          success: false,
-          message: "Please upload an avatar",
-        });
+      if (!process.env.ACTIVATION_SECRET) {
+        throw new Error("ACTIVATION_SECRET is not configured");
       }
 
-      const userData = {
+      const pendingUser = {
         name,
         email,
-        password,
+        password: await bcrypt.hash(password, 10),
         avatar: req.file.filename,
       };
+      const activationToken = jwt.sign(
+        pendingUser,
+        process.env.ACTIVATION_SECRET,
+        { expiresIn: "5m" }
+      );
+      const clientUrl = process.env.CLIENT_URL || "http://localhost:5173";
+      const activationUrl = `${clientUrl.replace(/\/$/, "")}/activation/${activationToken}`;
 
-      console.log("Data before MongoDB:", userData);
-
-      const newUser = await User.create(userData);
-
-      console.log("Data saved in MongoDB:", newUser);
-
-      // Create activation token
-      const activationToken = createActivationToken(newUser);
-
-      const activationUrl =
-        `http://localhost:3000/activation/${activationToken}`;
-
-      console.log("Activation URL:", activationUrl);
+      await sendMail({
+        email,
+        subject: "Activate your account",
+        message: `Hello ${name},\n\nPlease activate your account using this link:\n${activationUrl}`,
+      });
 
       return res.status(201).json({
         success: true,
-        message: "User created successfully",
-        user: newUser,
-        activationUrl: activationUrl,
+        message: `Please check ${email} to activate your account`,
       });
-
     } catch (error) {
-      console.error("CREATE USER ERROR:", error);
-
-      return next(
-        new ErrorHandler(error.message, 400)
-      );
+      await removeUpload(req.file);
+      return next(error);
     }
   })
 );
 
-
-// =========================
-// CREATE ACTIVATION TOKEN
-// =========================
-const createActivationToken = (user) => {
-  return jwt.sign(
-    {
-      name: user.name,
-      email: user.email,
-      password: user.password,
-      avatar: user.avatar,
-    },
-    process.env.Activation_SECRET,
-    {
-      expiresIn: "5m",
-    }
-  );
-};
-
-
-// =========================
-// ACTIVATE USER
-// =========================
 router.post(
   "/activation",
   catchAsyncErrors(async (req, res, next) => {
-    try {
-      const { activation_token } = req.body;
+    const { activation_token: activationToken } = req.body;
 
-      if (!activation_token) {
-        return next(
-          new ErrorHandler("Activation token is required", 400)
-        );
-      }
-
-      const newUser = jwt.verify(
-        activation_token,
-        process.env.Activation_SECRET
-      );
-
-      if (!newUser) {
-        return next(
-          new ErrorHandler("Invalid token", 400)
-        );
-      }
-
-      const { name, email, password, avatar } = newUser;
-
-      const existingUser = await User.findOne({ email });
-
-      if (existingUser) {
-        return next(
-          new ErrorHandler("User already exists", 400)
-        );
-      }
-
-      const createdUser = await User.create({
-        name,
-        email,
-        password,
-        avatar,
-      });
-
-      return res.status(201).json({
-        success: true,
-        message: "User activated successfully",
-        user: createdUser,
-      });
-
-    } catch (error) {
-      console.error("ACTIVATION ERROR:", error);
-
-      return next(
-        new ErrorHandler(error.message, 400)
-      );
+    if (!activationToken) {
+      return next(new ErrorHandler("Activation token is required", 400));
     }
+
+    if (!process.env.ACTIVATION_SECRET) {
+      return next(new ErrorHandler("ACTIVATION_SECRET is not configured", 500));
+    }
+
+    const pendingUser = jwt.verify(
+      activationToken,
+      process.env.ACTIVATION_SECRET
+    );
+    const { name, email, password, avatar } = pendingUser;
+
+    if (!name || !email || !password || !avatar) {
+      return next(new ErrorHandler("Invalid activation token", 400));
+    }
+
+    if (await User.findOne({ email })) {
+      return next(new ErrorHandler("User already exists", 400));
+    }
+
+    const user = await User.create({ name, email, password, avatar });
+    return sendToken(user, 201, res);
   })
 );
 
+router.post(
+  "/login-user",
+  catchAsyncErrors(async (req, res, next) => {
+    const email = req.body.email?.trim().toLowerCase();
+    const password = req.body.password;
+
+    if (!email || !password) {
+      return next(new ErrorHandler("Email and password are required", 400));
+    }
+
+    const user = await User.findOne({ email }).select("+password");
+    if (!user || !(await user.comparePassword(password))) {
+      return next(new ErrorHandler("Invalid email or password", 401));
+    }
+
+    return sendToken(user, 200, res);
+  })
+);
 
 module.exports = router;

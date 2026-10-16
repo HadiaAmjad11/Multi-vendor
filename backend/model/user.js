@@ -1,31 +1,74 @@
 const mongoose = require("mongoose");
+const bcrypt = require("bcrypt");
+const jwt = require("jsonwebtoken");
 
-const userSchema = new mongoose.Schema(
-  {
-    name: {
-      type: String,
-      required: true,
-    },
-
-    email: {
-      type: String,
-      required: true,
-      unique: true,
-    },
-
-    password: {
-      type: String,
-      required: true,
-    },
-
-    avatar: {
-      type: String,
-      required: true,
-    },
+const userSchema = new mongoose.Schema({
+  name: {
+    type: String,
+    required: [true, "Please enter your name!"],
   },
-  {
-    timestamps: true,
-  }
-);
+  email: {
+    type: String,
+    required: [true, "Please enter your email!"],
+    unique: true,
+    trim: true,
+    lowercase: true,
+  },
+  password: {
+    type: String,
+    required: [true, "Please enter your password"],
+    minLength: [4, "Password should be greater than 4 characters"],
+    select: false,
+  },
+  phoneNumber: {
+    type: Number,
+    trim: true,
+  },
+
+  addresses: [
+    {
+      country: { type: String },
+      city: { type: String },
+      address1: { type: String },
+      address2: { type: String },
+      zipCode: { type: String },
+      addressType: { type: String },
+    },
+  ],
+  role: {
+    type: String,
+    default: "user",
+  },
+  avatar: {
+    type: String,
+  },
+  createdAt: {
+    type: Date,
+    default: Date.now,
+  },
+  resetPasswordToken: String,
+  resetPasswordTime: Date,
+});
+
+// Hash password before saving to database
+userSchema.pre("save", async function () {
+  if (!this.isModified("password")) return;
+
+  // The password inside the signed activation token is already hashed.
+  if (/^\$2[aby]\$\d{2}\$/.test(this.password)) return;
+  this.password = await bcrypt.hash(this.password, 10);
+});
+
+// Generate JWT token for authentication
+userSchema.methods.getJwtToken = function () {
+  return jwt.sign({ id: this._id }, process.env.JWT_SECRET_KEY, {
+    expiresIn: process.env.JWT_EXPIRES || "7d",
+  });
+};
+
+// Compare entered password with stored hashed password
+userSchema.methods.comparePassword = async function (enteredPassword) {
+  return await bcrypt.compare(enteredPassword, this.password);
+};
 
 module.exports = mongoose.model("User", userSchema);

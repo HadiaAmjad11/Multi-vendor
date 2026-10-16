@@ -2,8 +2,9 @@ import React, { useState } from "react";
 import { AiOutlineEye, AiOutlineEyeInvisible } from "react-icons/ai";
 import { RxAvatar } from "react-icons/rx";
 import { Link } from "react-router-dom";
-import {server} from "../../server"
+import { server } from "../../server";
 import axios from "axios";
+import { toast } from "react-toastify";
 const Signup = () => {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -29,10 +30,14 @@ const Signup = () => {
   axios
     .post(`${server}/user/create-user`, newForm)
     .then((res) => {
-      console.log("SUCCESS:", res.data);
+      toast.success(
+        res.data.message || "Please check your email to activate your account."
+      );
     })
     .catch((err) => {
-      console.log("ERROR:", err.response?.data || err);
+      toast.error(
+        err.response?.data?.message || "Registration failed. Please try again."
+      );
     });
 };
 
