@@ -6,6 +6,7 @@ const cors = require("cors");
 
 const app = express();
 
+// Middleware
 app.use(express.json());
 app.use(cookieParser());
 app.use("/", express.static("uploads"));
@@ -17,6 +18,7 @@ app.use(
   })
 );
 
+// CORS configuration
 app.use(
   cors({
     origin: "http://localhost:5173",
@@ -24,14 +26,14 @@ app.use(
   })
 );
 
-// Config
+// Load environment variables
 if (process.env.NODE_ENV !== "PRODUCTION") {
   require("dotenv").config({
     path: "config/.env",
   });
 }
 
-// Import router (declare only once)
+// Import user router
 const user = require("./controller/user");
 
 // Test route
